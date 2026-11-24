@@ -1,8 +1,10 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, computed, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Api } from './api';
-import { Comment, Context, Project, Task, TaskDetail, TaskStatus } from './models';
+import { AttentionItem, AttentionSummary, Comment, Context, Project, Task, TaskDetail, TaskStatus } from './models';
+
+type View = 'attention' | 'project';
 
 @Component({
   selector: 'app-root',
@@ -26,7 +28,14 @@ export class AppComponent {
   comment = '';
   creating = signal(false);
   draft = this.emptyDraft();
+  /** null until the first load decides: leads start on the attention view. */
+  view = signal<View | null>(null);
+  attention = signal<AttentionSummary | null>(null);
+  attentionLoading = signal(false);
+  attentionError = signal('');
+  attentionCount = computed(() => this.attention()?.items.length ?? 0);
   private generation = 0;
+  private attentionGeneration = 0;
   private detailGeneration = 0;
   readonly statuses: { value: TaskStatus; label: string }[] = [
     { value: 'open', label: 'Открыта' }, { value: 'in_progress', label: 'В работе' },
@@ -47,6 +56,13 @@ export class AppComponent {
       if (generation !== this.generation) return;
       this.context.set(context);
       this.projects.set(projects);
+      const summary = await this.refreshAttention();
+      if (generation !== this.generation) return;
+      const leadsProjects = (summary?.projects.length ?? 0) > 0;
+      if (this.view() === 'attention' || (this.view() === null && leadsProjects)) {
+        this.showAttention();
+        return;
+      }
       const project = projects.find(p => p.id === this.project()?.id) ?? projects[0];
       if (project) await this.selectProject(project);
     } catch (error) {
@@ -58,6 +74,9 @@ export class AppComponent {
 
   switchUser(value: string): void {
     this.api.userId = Number(value);
+    this.view.set(null);
+    this.attention.set(null);
+    this.attentionError.set('');
     this.project.set(null);
     this.projects.set([]);
     this.tasks.set([]);
@@ -68,6 +87,7 @@ export class AppComponent {
 
   async selectProject(project: Project): Promise<void> {
     const generation = ++this.generation;
+    this.view.set('project');
     this.loading.set(true);
     this.error.set('');
     this.notice.set('');
@@ -84,6 +104,61 @@ export class AppComponent {
     } finally {
       if (generation === this.generation) this.loading.set(false);
     }
+  }
+
+  /** Sidebar entry: show the summary and fetch a fresh one. */
+  openAttention(): void {
+    this.showAttention();
+    void this.refreshAttention();
+  }
+
+  showAttention(): void {
+    ++this.generation; // a pending project load must not switch the view back
+    this.view.set('attention');
+    this.loading.set(false);
+    this.error.set('');
+    this.notice.set('');
+    this.closeDetail();
+  }
+
+  async refreshAttention(): Promise<AttentionSummary | null> {
+    const generation = ++this.attentionGeneration;
+    const userId = this.api.userId;
+    this.attentionLoading.set(true);
+    this.attentionError.set('');
+    try {
+      const summary = await this.api.request<AttentionSummary>('/attention');
+      if (generation !== this.attentionGeneration || userId !== this.api.userId) return null;
+      this.attention.set(summary);
+      return summary;
+    } catch (error) {
+      if (generation === this.attentionGeneration) {
+        this.attentionError.set(error instanceof Error ? error.message : 'Не удалось загрузить сводку');
+      }
+      return null;
+    } finally {
+      if (generation === this.attentionGeneration) this.attentionLoading.set(false);
+    }
+  }
+
+  async openAttentionItem(item: AttentionItem): Promise<void> {
+    const project = this.projects().find(p => p.id === item.project.id);
+    if (!project) return;
+    // The task card takes members and the archive flag from the current project.
+    this.project.set(project);
+    await this.openTask(item.task);
+    if (this.detail()?.id === item.task.id && matchMedia('(max-width: 850px)').matches) {
+      // On narrow screens the card is rendered below the list.
+      setTimeout(() => document.querySelector('.detail')?.scrollIntoView({ block: 'start' }));
+    }
+  }
+
+  attentionHint(): string {
+    const summary = this.attention();
+    if (!summary) return this.attentionError() ? 'Сводка недоступна' : 'Загружаем…';
+    if (!summary.projects.length) return 'Вы не руководите проектами';
+    const count = summary.items.length;
+    return count ? `${count} ${this.plural(count, 'задача', 'задачи', 'задач')}` : 'Всё спокойно';
   }
 
   filteredTasks(): Task[] {
@@ -152,6 +227,7 @@ export class AppComponent {
         };
         this.notice.set('Задача сохранена');
       }
+      void this.refreshAttention();
     } catch (error) { if (generation === this.detailGeneration) this.fail(error); }
     finally { this.saving.set(false); }
   }
@@ -169,12 +245,19 @@ export class AppComponent {
       this.detail.update(current => current ? { ...current, comments: [...current.comments, comment] } : current);
       this.comment = '';
       this.notice.set('Комментарий добавлен');
+      // The lead's answer may clear "waiting for your reply".
+      void this.refreshAttention();
     } catch (error) { if (generation === this.detailGeneration) this.fail(error); }
     finally { this.saving.set(false); }
   }
 
   statusLabel(status: string): string { return this.statuses.find(s => s.value === status)?.label ?? status; }
   userName(id: number | null): string { return this.context()?.users.find(u => u.id === id)?.name ?? 'Не назначен'; }
+  private plural(n: number, one: string, few: string, many: string): string {
+    const mod10 = n % 10, mod100 = n % 100;
+    if (mod10 === 1 && mod100 !== 11) return one;
+    return mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14) ? few : many;
+  }
   private fail(error: unknown): void { this.error.set(error instanceof Error ? error.message : 'Не удалось выполнить запрос'); }
   private emptyDraft(): { title: string; description: string; status: TaskStatus; assignee_id: number | null; due_at: string } {
     return { title: '', description: '', status: 'open', assignee_id: null, due_at: '' };

@@ -395,6 +395,118 @@ fieldset {
 .muted {
   color:#87939b;
 }
+.attention-link {
+  align-items:flex-start;
+  margin-bottom:16px;
+}
+.attention-count {
+  margin-left:auto;
+  align-self:center;
+  min-width:22px;
+  text-align:center;
+  font-size:11px;
+  font-weight:600;
+  background:#b3471d;
+  color:#fff;
+  border-radius:11px;
+  padding:2px 7px;
+}
+.attention-list {
+  list-style:none;
+  margin:0;
+  padding:0;
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+.attention-item {
+  width:100%;
+  text-align:left;
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  padding:16px 18px;
+  border:1px solid #d8dee4;
+  border-radius:9px;
+  background:#fff;
+}
+.attention-item:hover:not(:disabled) {
+  background:#fbfcfd;
+  border-color:#b9c3cc;
+}
+.attention-item.current {
+  border-color:#28714c;
+  box-shadow:inset 3px 0 0 #28714c;
+}
+.attention-head {
+  display:flex;
+  gap:10px;
+  align-items:baseline;
+}
+.attention-title {
+  font-weight:600;
+  font-size:14px;
+}
+.attention-meta {
+  display:flex;
+  flex-wrap:wrap;
+  gap:4px 18px;
+  color:#74808a;
+  font-size:12px;
+}
+.reasons {
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+}
+.reason {
+  font-size:11px;
+  padding:3px 8px;
+  border-radius:5px;
+  background:#eef1f4;
+  color:#596671;
+}
+.reason.needs_reply {
+  background:#fbe4dc;
+  color:#922f12;
+  font-weight:600;
+}
+.reason.overdue,.reason.blocked {
+  background:#fff0e6;
+  color:#9a4d17;
+}
+.reason.due_soon {
+  background:#fbf3d9;
+  color:#6f520b;
+}
+.evidence {
+  display:block;
+  border-left:3px solid #e0a088;
+  padding:2px 0 2px 12px;
+  font-size:12px;
+  line-height:1.6;
+  color:#33404a;
+}
+.evidence-body {
+  display:-webkit-box;
+  -webkit-line-clamp:3;
+  -webkit-box-orient:vertical;
+  overflow:hidden;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+}
+.evidence-author {
+  display:block;
+  color:#87939b;
+  font-size:11px;
+  margin-top:4px;
+}
+.attention-empty {
+  background:#fff;
+  border:1px dashed #d0d7de;
+  border-radius:9px;
+  line-height:1.6;
+}
 @media(max-width:1150px) {
   .sidebar {
     width:210px;
@@ -445,6 +557,12 @@ fieldset {
   }
   .project-link {
     min-width:170px;
+  }
+  .attention-link {
+    margin-bottom:0;
+  }
+  .attention-item {
+    padding:14px;
   }
   .detail {
     width:100%;
