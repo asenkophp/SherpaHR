@@ -61,7 +61,8 @@ final class Application
         if (preg_match('#^/api/projects/(\d+)/tasks$#', $path, $match)) {
             $project = $this->project((int) $match[1]);
             if ($method === 'GET') {
-                $this->respond($this->all('SELECT t.* FROM tasks t JOIN users u ON u.id=t.assignee_id WHERE t.project_id=? ORDER BY t.id', [$project['id']]));
+                // Unassigned tasks are part of the project too: no join on the assignee.
+                $this->respond($this->all('SELECT t.* FROM tasks t WHERE t.project_id=? ORDER BY t.id', [$project['id']]));
                 return;
             }
             if ($method === 'POST') {
@@ -102,8 +103,26 @@ final class Application
             $task = $this->task((int) $match[1]);
             $this->writable($this->project($task['project_id']));
             $data = $this->input();
-            $this->text($data['body'] ?? null, 'Комментарий', 5000, true);
-            throw new ApiError('Добавление комментариев пока не реализовано', 501);
+            if (array_diff(array_keys($data), ['body'])) {
+                throw new ApiError('Неизвестные поля комментария', 422);
+            }
+            $body = $this->text($data['body'] ?? null, 'Комментарий', 5000, true);
+            $now = gmdate('Y-m-d\TH:i:s\Z');
+            // A comment is task activity, but not an edit of its fields: version stays the same,
+            // so somebody editing the task in parallel does not get a false conflict.
+            $this->db->beginTransaction();
+            try {
+                $this->db->prepare('INSERT INTO comments (task_id, user_id, body, created_at) VALUES (?, ?, ?, ?)')
+                    ->execute([$task['id'], $this->userId, $body, $now]);
+                $id = (int) $this->db->lastInsertId();
+                $this->db->prepare('UPDATE tasks SET updated_at=? WHERE id=?')->execute([$now, $task['id']]);
+                $this->db->commit();
+            } catch (Throwable $error) {
+                $this->db->rollBack();
+                throw $error;
+            }
+            $this->respond($this->one('SELECT c.*, u.name AS author FROM comments c JOIN users u ON u.id=c.user_id WHERE c.id=?', [$id]), 201);
+            return;
         }
         throw new ApiError('Маршрут не найден', 404);
     }
