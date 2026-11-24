@@ -44,9 +44,13 @@ final class Application
             $this->respond([
                 'user' => $this->one('SELECT * FROM users WHERE id = ?', [$this->userId]),
                 'users' => $this->all('SELECT * FROM users ORDER BY id'),
-                'server_now' => gmdate('Y-m-d\TH:i:s\Z'),
+                'server_now' => $this->stamp(),
                 'seeded_at' => $this->db->query("SELECT value FROM metadata WHERE key = 'seeded_at'")->fetchColumn(),
             ]);
+            return;
+        }
+        if ($method === 'GET' && $path === '/api/attention') {
+            $this->respond($this->attention());
             return;
         }
         if ($method === 'GET' && $path === '/api/projects') {
@@ -70,7 +74,7 @@ final class Application
                 $data = $this->input();
                 $fields = $this->validateTask($data, $project['id'], false);
                 $stmt = $this->db->prepare('INSERT INTO tasks (project_id,title,description,status,assignee_id,due_at,updated_at) VALUES (?,?,?,?,?,?,?)');
-                $stmt->execute([$project['id'], $fields['title'], $fields['description'], $fields['status'], $fields['assignee_id'], $fields['due_at'], gmdate('Y-m-d\TH:i:s\Z')]);
+                $stmt->execute([$project['id'], $fields['title'], $fields['description'], $fields['status'], $fields['assignee_id'], $fields['due_at'], $this->stamp()]);
                 $this->respond($this->task((int) $this->db->lastInsertId()), 201);
                 return;
             }
@@ -91,7 +95,7 @@ final class Application
                 }
                 $updated = array_merge($task, $fields);
                 $stmt = $this->db->prepare('UPDATE tasks SET title=?,description=?,status=?,assignee_id=?,due_at=?,updated_at=?,version=version+1 WHERE id=? AND version=?');
-                $stmt->execute([$updated['title'], $updated['description'], $updated['status'], $updated['assignee_id'], $updated['due_at'], gmdate('Y-m-d\TH:i:s\Z'), $task['id'], $data['version']]);
+                $stmt->execute([$updated['title'], $updated['description'], $updated['status'], $updated['assignee_id'], $updated['due_at'], $this->stamp(), $task['id'], $data['version']]);
                 if ($stmt->rowCount() !== 1) {
                     throw new ApiError('Задача изменилась. Откройте её заново перед сохранением.', 409);
                 }
@@ -107,7 +111,7 @@ final class Application
                 throw new ApiError('Неизвестные поля комментария', 422);
             }
             $body = $this->text($data['body'] ?? null, 'Комментарий', 5000, true);
-            $now = gmdate('Y-m-d\TH:i:s\Z');
+            $now = $this->stamp();
             // A comment is task activity, but not an edit of its fields: version stays the same,
             // so somebody editing the task in parallel does not get a false conflict.
             $this->db->beginTransaction();
@@ -125,6 +129,48 @@ final class Application
             return;
         }
         throw new ApiError('Маршрут не найден', 404);
+    }
+
+    /**
+     * Open tasks of active projects led by the current user that need attention.
+     * Leading a project means being its owner and still a member of it.
+     */
+    private function attention(): array
+    {
+        $lead = $this->one('SELECT * FROM users WHERE id = ?', [$this->userId]);
+        $projects = $this->all('SELECT p.id, p.name FROM projects p JOIN project_members m ON m.project_id=p.id AND m.user_id=? WHERE p.owner_id=? AND p.archived=0 ORDER BY p.id', [$this->userId, $this->userId]);
+        $summary = ['generated_at' => $this->stamp(), 'projects' => $projects, 'items' => []];
+        if (!$projects) {
+            return $summary;
+        }
+        $ids = array_column($projects, 'id');
+        $in = implode(',', array_fill(0, count($ids), '?'));
+        $tasks = $this->all("SELECT * FROM tasks WHERE project_id IN ($in) AND status <> 'done' ORDER BY id", $ids);
+        $commentsByTask = [];
+        foreach ($this->all("SELECT c.*, u.name AS author FROM comments c JOIN users u ON u.id=c.user_id JOIN tasks t ON t.id=c.task_id WHERE t.project_id IN ($in) AND t.status <> 'done' ORDER BY c.task_id, c.id", $ids) as $comment) {
+            $commentsByTask[$comment['task_id']][] = $comment;
+        }
+        $summary['items'] = (new Attention())->evaluate($tasks, $commentsByTask, array_column($projects, null, 'id'), $this->userId, $lead['name'], $this->now());
+        return $summary;
+    }
+
+    /** Current UTC time. APP_NOW (YYYY-MM-DDTHH:mm:ssZ) pins it for automated tests only. */
+    private function now(): DateTimeImmutable
+    {
+        $fixed = getenv('APP_NOW');
+        if ($fixed === false || $fixed === '') {
+            return new DateTimeImmutable('now', new DateTimeZone('UTC'));
+        }
+        $date = DateTimeImmutable::createFromFormat('!Y-m-d\TH:i:s\Z', $fixed, new DateTimeZone('UTC'));
+        if (!$date || $date->format('Y-m-d\TH:i:s\Z') !== $fixed) {
+            throw new RuntimeException('APP_NOW must be YYYY-MM-DDTHH:mm:ssZ');
+        }
+        return $date;
+    }
+
+    private function stamp(): string
+    {
+        return $this->now()->format('Y-m-d\TH:i:s\Z');
     }
 
     private function validateTask(array $data, int $projectId, bool $partial): array
